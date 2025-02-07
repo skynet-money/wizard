@@ -18,7 +18,7 @@ import * as fs from "fs";
 import * as readline from "readline";
 import { getTokenPrice, TokenPriceResponse } from "./coingecko";
 import { readMemecoinsFile } from "./parseMemecoins";
-import { readPortfolio } from "./readPortfolio";
+import { readPortfolio, updatePortfolio } from "./readPortfolio";
 
 dotenv.config();
 
@@ -170,9 +170,21 @@ async function runAutonomousMode(agent: any, config: any, interval = 10) {
             const addressToNameDictionary = memecoins.reduce((dict, memecoin) => {
                 dict[memecoin.address] = memecoin.name;
                 return dict;
-              }, {} as Record<string, string>);
+            }, {} as Record<string, string>);
+
+            const nameToAddressDictionary = memecoins.reduce((dict, memecoin) => {
+                dict[memecoin.name] = memecoin.address;
+                return dict;
+            }, {} as Record<string, string>);
 
             const priceUpdates = await updateTokenPrices();
+
+            const addressToPriceDictionary = priceUpdates.reduce((dict, priceUpdate) => {
+                const contractAddress = Object.keys(priceUpdate)[0];
+                dict[contractAddress] = priceUpdate;
+                return dict
+            }, {} as Record<string, TokenPriceResponse>)
+
             const formattedString = priceUpdates
                 .map((tokenPrice) => {
                     const contractAddress = Object.keys(tokenPrice)[0];
@@ -180,31 +192,63 @@ async function runAutonomousMode(agent: any, config: any, interval = 10) {
                     return `name: ${addressToNameDictionary[contractAddress]}, contractAddress: ${contractAddress}, price: ${usd} USD, market cap: ${usd_market_cap} USD, 24h volume: ${usd_24h_vol}, 24h change: ${usd_24h_change} %`;
                 })
                 .join("\n");
+
+            const portfolio = readPortfolio();
+
+            const formattedPortfolioStrings: string[] = portfolio.map(item => {
+                if (item.asset == "USDC") {
+                    return `${item.value} USDC. \n`;
+                }
+                return `${item.amount} of ${item.asset} bought at the price level of ${item.value} USDC. \n`;
+            });
+
+            // If you want to combine all the formatted strings into a single string:
+            const combinedPortfolioString: string = formattedPortfolioStrings.join('');
+
             const thought =
-                "Your capital is 50 USDC on Base." +
-                "Here are the price updates for the 5 biggest memecoins on Base. " +
+                "Your portfolio consists of the following elements: " +
+                combinedPortfolioString +
+                "Here are the latest current price updates for the 5 biggest memecoins on Base. " +
                 formattedString +
-                "Please analyze the price updates and advise if any of the tokens would be worth buying." +
-                "You can either decode to buy any number of the tokens or refrain from purchasing." + 
-                "Please stay within the limits of your overall capital." + 
+                "Please analyze the price updates and your current portfolio composition and decide if any of the tokens are be worth buying or selling." +
+                "Please act as an expert techincal analyist and consider all provided metrics, including the price, the 24h price change, the market cap, and the 24h volume." +
+                "You can either decide to buy any number of the tokens, sell any number of the tokens, or refrain from purchasing or selling." +
+                "Please stay within the limits of your overall capital." +
                 "Never invest all your capital into a single token. Diversify, or if there is only one token worth buying, only invest a portion of the total capital into it." +
-                "Only invest at max 10% of your capital into any single token." + 
-                "Please answer only with the token name and buy amount, or if not buying anything with the word 'refraining.'";
+                "Only invest at max 5% of your capital into any single token." +
+                "Please be very precise and thorough in your calculations. When you calculate how much amount to sell of a given currency at the latest current price update, make sure that the portfolio amount never goes below zero." +
+                "Please only answer in the following format for each buy: <token name> buy <amount in usdc>" +
+                "Please only answer in the following format for each sell: <token name> sell <amount in usdc>" +
+                "If you are not trading anything, please only reply with a single word only: 'refraining'.";
 
             console.log(thought);
 
             const stream = await agent.stream({ messages: [new HumanMessage(thought)] }, config);
 
+            let message: string = "";
+
             for await (const chunk of stream) {
                 if ("agent" in chunk) {
                     console.log(chunk.agent.messages[0].content);
+                    message = chunk.agent.messages[0].content as string;
                 } else if ("tools" in chunk) {
                     console.log(chunk.tools.messages[0].content);
+                    message = chunk.tools.messages[0].content as string;
                 }
                 console.log("-------------------");
             }
 
-            await new Promise(resolve => setTimeout(resolve, interval * 10000000));
+            let messages = message.split("\n")
+
+            console.log("messages length: ", messages.length);
+
+            if (message == "refraining") {
+                await sleep(120000);
+                continue
+            }
+
+            updatePortfolio(messages, nameToAddressDictionary, addressToPriceDictionary);
+            await sleep(120000);
         } catch (error) {
             if (error instanceof Error) {
                 console.error("Error:", error.message);
