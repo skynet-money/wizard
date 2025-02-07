@@ -15,7 +15,6 @@ import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { ChatOpenAI } from "@langchain/openai";
 import * as dotenv from "dotenv";
 import * as fs from "fs";
-import * as readline from "readline";
 import { getTokenPrice, TokenPriceResponse } from "./coingecko";
 import { readMemecoinsFile } from "./parseMemecoins";
 import { readPortfolio, updatePortfolio } from "./readPortfolio";
@@ -28,7 +27,7 @@ dotenv.config();
  * @throws {Error} - If required environment variables are missing
  * @returns {void}
  */
-function validateEnvironment(): void {
+export function validateEnvironment(): void {
     const missingVars: string[] = [];
 
     // Check required variables
@@ -66,7 +65,7 @@ const WALLET_DATA_FILE = "wallet_data.txt";
  *
  * @returns Agent executor and config
  */
-async function initializeAgent() {
+export async function initializeAgent() {
     try {
         // Initialize LLM
         const llm = new ChatOpenAI({
