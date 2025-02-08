@@ -1,6 +1,6 @@
 import { time } from 'console';
 import fs from 'fs';
-import { TokenPriceResponse } from './coingecko';
+import { Coin, fetchWETHPrice } from './coinranking';
 
 interface PortfolioItem {
     asset: string;
@@ -32,13 +32,14 @@ export function readPortfolio(): PortfolioItem[] {
     }
 }
 
-export function updatePortfolio(messages: string[], dict: Record<string, string>, addressToTokenPrices: Record<string, TokenPriceResponse>) {
+export function updatePortfolio(messages: string[], dict: Record<string, string>, addressToTokenPrices: Record<string, Coin>, wethPriceUsd: number) {
     let portfolioItemsBuy: Record<string, PortfolioItemAction> = {}
     let portfolioItemsSell: Record<string, PortfolioItemAction> = {}
 
     let totalAmountBuy: number = 0
     let totalAmountSell: number = 0
 
+    // have to add the tokens that are not part of the portfolio to the portfolio as well
     for (let i = 0; i < messages.length; i++) {
         const messageParts = splitString(messages[i]);
         console.log("message: ", messages[i])
@@ -54,7 +55,7 @@ export function updatePortfolio(messages: string[], dict: Record<string, string>
             totalAmountBuy += item.value
             portfolioItemsBuy[token] = item
         } else {
-            totalAmountSell += item.value
+            totalAmountSell += item.value * parseFloat(addressToTokenPrices[item.address].price)
             portfolioItemsSell[token] = item
         }
     }
@@ -64,21 +65,25 @@ export function updatePortfolio(messages: string[], dict: Record<string, string>
 
     const portfolio = readPortfolio();
 
+    const portfolioTokenAddresses = portfolio.map((item) => item.address.toLowerCase());
+
     for (let i = 0; i < portfolio.length; i++) {
         console.log("updating: ", portfolio[i].asset)
 
-        if (portfolio[i].asset == "USDC") {
-            portfolio[i].value += totalAmountSell - totalAmountBuy
+        if (portfolio[i].asset == "WETH") {
+            const totalAmountSellWeth = totalAmountSell / wethPriceUsd
+
+            portfolio[i].value += totalAmountSellWeth - totalAmountBuy
             portfolio[i].purchased = Date.now()
             continue
         }
 
         // calculate how much the amount is in dst token
-        if (addressToTokenPrices[portfolio[i].address] == undefined || addressToTokenPrices[portfolio[i].address][portfolio[i].address] == undefined) {
+        if (addressToTokenPrices[portfolio[i].address] == undefined) {
             continue
         }
 
-        const { usd } = addressToTokenPrices[portfolio[i].address][portfolio[i].address];
+        const usd = parseFloat(addressToTokenPrices[portfolio[i].address].price);
 
         if (portfolioItemsBuy[portfolio[i].asset] != undefined && portfolioItemsBuy[portfolio[i].asset].value != 0) {
             const amountToken = portfolioItemsBuy[portfolio[i].asset].value / usd;
@@ -89,7 +94,7 @@ export function updatePortfolio(messages: string[], dict: Record<string, string>
         }
 
         if (portfolioItemsSell[portfolio[i].asset] != undefined && portfolioItemsSell[portfolio[i].asset].value != 0) {
-            const amountToken = portfolioItemsSell[portfolio[i].asset].value / usd;
+            const amountToken = portfolioItemsSell[portfolio[i].asset].value;
             // set usdc value
             portfolio[i].value = usd
             // substract from amount
@@ -97,6 +102,20 @@ export function updatePortfolio(messages: string[], dict: Record<string, string>
         }
         portfolio[i].purchased = Date.now()
     }
+
+    Object.entries(portfolioItemsBuy).forEach(([key, item]) => {
+        if (!portfolioTokenAddresses.includes(item.address.toLowerCase())) {
+            const newItem: PortfolioItem = {
+                asset: item.name,
+                address: item.address,
+                value: parseFloat(addressToTokenPrices[item.address].price),
+                amount: item.value / parseFloat(addressToTokenPrices[item.address].price),
+                purchased: Date.now()
+            }
+
+            portfolio.push(newItem)
+        }
+    });
 
     const jsonString: string = JSON.stringify(portfolio, null, 2);
 
@@ -108,7 +127,7 @@ export function updatePortfolio(messages: string[], dict: Record<string, string>
     }
 }
 
-function splitString(input: string): string[] {
+export function splitString(input: string): string[] {
     // Split the string into an array of words
     const words = input.split(' ');
 

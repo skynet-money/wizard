@@ -15,9 +15,12 @@ import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { ChatOpenAI } from "@langchain/openai";
 import * as dotenv from "dotenv";
 import * as fs from "fs";
-import { getTokenPrice, TokenPriceResponse } from "./coingecko";
-import { readMemecoinsFile } from "./parseMemecoins";
-import { readPortfolio, updatePortfolio } from "./readPortfolio";
+import { readPortfolio, splitString, updatePortfolio } from "./readPortfolio";
+import { fetchCoins, Coin, fetchWETHPrice } from "./coinranking";
+
+import { Coinbase, Wallet } from "@coinbase/coinbase-sdk";
+import { error } from "console";
+
 
 dotenv.config();
 
@@ -88,8 +91,8 @@ export async function initializeAgent() {
         const config = {
             apiKeyName: process.env.CDP_API_KEY_NAME,
             apiKeyPrivateKey: process.env.CDP_API_KEY_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-            cdpWalletData: walletDataStr || undefined,
-            networkId: process.env.NETWORK_ID || "base-sepolia",
+            cdpWalletData: walletDataStr!,
+            networkId: "base-mainnet",
         };
 
         const walletProvider = await CdpWalletProvider.configureWithWallet(config);
@@ -119,7 +122,6 @@ export async function initializeAgent() {
         const memory = new MemorySaver();
         const agentConfig = { configurable: { thread_id: "skynet.money Market Wizard Agent" } };
 
-
         // Create React Agent using the LLM and CDP AgentKit tools
         const agent = createReactAgent({
             llm,
@@ -130,21 +132,21 @@ export async function initializeAgent() {
             You analyze price data, market trends, and your current portfolio to make optimal trading decisions. 
             You can interact onchain using the Coinbase Developer Platform AgentKit and execute trades accordingly.
             Before making any trade, check your wallet details to determine which network you are on.
-            If you need funds and are on network ID 'base-sepolia', request them from the faucet. Otherwise, provide your wallet details and request funds from the user.
+            If you need funds provide your wallet details and request funds from the user.
             Handle internal HTTP errors (5XX) by asking the user to retry later.
             If you are asked to perform an action beyond your current toolset, inform the user and suggest implementing it using the CDP SDK + AgentKit. 
             Recommend visiting docs.cdp.coinbase.com for more details.
             Be precise, efficient, and solely focused on profitable trading decisions. Refrain from unnecessary explanations unless explicitly requested.
             After receiving price updates and portfolio data, decide whether to execute a trade or hold. 
             Your objective: maximize profit, make the most amount of money.
-          `,
+            `,
         });
 
         // Save wallet data
         const exportedWallet = await walletProvider.exportWallet();
         fs.writeFileSync(WALLET_DATA_FILE, JSON.stringify(exportedWallet));
 
-        return { agent, config: agentConfig };
+        return { agent, config: agentConfig, wallet: walletProvider };
     } catch (error) {
         console.error("Failed to initialize agent:", error);
         throw error; // Re-throw to be handled by caller
@@ -152,51 +154,47 @@ export async function initializeAgent() {
 }
 
 /**
-* Run the agent autonomously with specified intervals
+ * Run the agent autonomously with specified intervals
 *
 * @param agent - The agent executor
 * @param config - Agent configuration
 * @param interval - Time interval between actions in seconds
 */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function runAutonomousMode(agent: any, config: any, interval = 10) {
+async function runAutonomousMode(agent: any, config: any, wallet: CdpWalletProvider) {
     console.log("Starting autonomous mode...");
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
         try {
-            const memecoins = readMemecoinsFile();
-            const addressToNameDictionary = memecoins.reduce((dict, memecoin) => {
-                dict[memecoin.address] = memecoin.name;
-                return dict;
-            }, {} as Record<string, string>);
-
-            const nameToAddressDictionary = memecoins.reduce((dict, memecoin) => {
-                dict[memecoin.name] = memecoin.address;
-                return dict;
-            }, {} as Record<string, string>);
-
-            const priceUpdates = await updateTokenPrices();
-
-            const addressToPriceDictionary = priceUpdates.reduce((dict, priceUpdate) => {
-                const contractAddress = Object.keys(priceUpdate)[0];
-                dict[contractAddress] = priceUpdate;
-                return dict
-            }, {} as Record<string, TokenPriceResponse>)
-
-            const formattedString = priceUpdates
-                .map((tokenPrice) => {
-                    const contractAddress = Object.keys(tokenPrice)[0];
-                    const { usd, usd_market_cap, usd_24h_vol, usd_24h_change } = tokenPrice[contractAddress];
-                    return `name: ${addressToNameDictionary[contractAddress]}, contractAddress: ${contractAddress}, price: ${usd} USD, market cap: ${usd_market_cap} USD, 24h volume: ${usd_24h_vol}, 24h change: ${usd_24h_change} %`;
+            const response = await fetchCoins(process.env.COINRANKING_API_KEY as string);
+            const formattedString = response.data.coins
+                .map((coin) => {
+                    const baseElement = coin.contractAddresses.find((item) => item.startsWith('base/')) as string;
+                    const contractAddress = baseElement.split('base/')[1];
+                    return `name: ${coin.name}, contractAddress: ${contractAddress}, price: ${coin.price} USD, 24h volume: ${coin["24hVolume"]}, 1h change: ${coin.change}%, market cap: ${coin.marketCap} USD`
                 })
                 .join("\n");
+
+            const nameToAddressDictionary = response.data.coins.reduce((dict, coin) => {
+                const baseElement = coin.contractAddresses.find((item) => item.startsWith('base/')) as string;
+                const contractAddress = baseElement.split('base/')[1];
+                dict[coin.name] = contractAddress;
+                return dict;
+            }, {} as Record<string, string>);
+
+            const addressToPriceDictionary = response.data.coins.reduce((dict, coin) => {
+                const baseElement = coin.contractAddresses.find((item) => item.startsWith('base/')) as string;
+                const contractAddress = baseElement.split('base/')[1];
+                dict[contractAddress] = coin;
+                return dict
+            }, {} as Record<string, Coin>)
 
             const portfolio = readPortfolio();
 
             const formattedPortfolioStrings: string[] = portfolio.map(item => {
-                if (item.asset == "USDC") {
-                    return `${item.value} USDC. \n`;
+                if (item.asset == "WETH") {
+                    return `\n ${item.value} WETH. \n`;
                 }
                 return `${item.amount} of ${item.asset} bought at the price level of ${item.value} USDC. \n`;
             });
@@ -204,21 +202,28 @@ async function runAutonomousMode(agent: any, config: any, interval = 10) {
             // If you want to combine all the formatted strings into a single string:
             const combinedPortfolioString: string = formattedPortfolioStrings.join('');
 
+            const price = await fetchWETHPrice(process.env.COINRANKING_API_KEY!);
+            console.log("WETH price ", price)
+
             const thought =
-                "Your portfolio consists of the following elements: " +
+                "The current WETH price is " + price + " USDC. \n" +
+                "Your portfolio consists of the following elements, please pay extra careful attention to these portfolio elements and stay within their bounds. YOU CANNOT SPEND MORE WETH THAN YOU OWN: " +
                 combinedPortfolioString +
-                "Here are the latest current price updates for the 5 biggest memecoins on Base. " +
+                "Here are the latest current price updates for the biggest memecoins on Base: \n" +
                 formattedString +
-                "Please analyze the price updates and your current portfolio composition and decide if any of the tokens are be worth buying or selling." +
-                "Please act as an expert techincal analyist and consider all provided metrics, including the price, the 24h price change, the market cap, and the 24h volume." +
-                "You can either decide to buy any number of the tokens, sell any number of the tokens, or refrain from purchasing or selling." +
-                "Please stay within the limits of your overall capital." +
-                "Never invest all your capital into a single token. Diversify, or if there is only one token worth buying, only invest a portion of the total capital into it." +
-                "Only invest at max 5% of your capital into any single token." +
-                "Please be very precise and thorough in your calculations. When you calculate how much amount to sell of a given currency at the latest current price update, make sure that the portfolio amount never goes below zero." +
-                "Please only answer in the following format for each buy: <token name> buy <amount in usdc>" +
-                "Please only answer in the following format for each sell: <token name> sell <amount in usdc>" +
-                "If you are not trading anything, please only reply with a single word only: 'refraining'.";
+                "\n Please analyze the price updates and your current portfolio composition and decide if any of the tokens are be worth buying or selling. " +
+                "Please act as an expert techincal analyist and consider all provided metrics, including the price, the 24h price change, the market cap, and the 24h volume. " +
+                "You can either decide to buy any number of the tokens, sell any number of the tokens, or refrain from purchasing or selling. " +
+                "Please stay within the limits of your overall capital. " +
+                "Never invest all your capital into a single token. Diversify, or if there is only one token worth buying, only invest a portion of the total capital into it. " +
+                "Only invest at max 5% of your capital into any single token. " +
+                "Please be very precise and thorough in your calculations. When you calculate how much amount to sell of a given currency at the latest current price update, make sure that the portfolio amount never goes below zero. " +
+                "Please do not execute any trades yet on-chain." +
+                "Please pay careful attention to calculating the buy and sell amount. Never exceed what is specified in your portfolio. You can only sell assets that you own." +
+                "Please provide no analysis, and it is critical that you only reply in the format provided below: \n" +
+                "It is of utmost importance that you only answer in the following format for each buy: <token name> buy <amount in WETH> " +
+                "It is of utmost importance that you only answer in the following format for each sell: <token name> sell <amount> " + 
+                "If you are not trading anything, please only reply with a single word only: 'refraining'."
 
             console.log(thought);
 
@@ -242,12 +247,56 @@ async function runAutonomousMode(agent: any, config: any, interval = 10) {
             console.log("messages length: ", messages.length);
 
             if (message == "refraining") {
-                await sleep(120000);
+                await sleep(60000);
                 continue
             }
+            await sleep(10000);
+            
+            for (let i = 0; i < messages.length; i++) {
+                const messageParts = splitString(messages[i]);
 
-            updatePortfolio(messages, nameToAddressDictionary, addressToPriceDictionary);
-            await sleep(120000);
+                const token = messageParts[0]
+                const action = messageParts[1]
+                const amount = messageParts[2]
+                const tokenAddress = nameToAddressDictionary[token]
+
+                const wethAddress = "0x4200000000000000000000000000000000000006";
+
+                let fromAsset: string;
+                let toAsset: string;
+                if (action == "buy") {
+                    fromAsset = wethAddress;
+                    toAsset = tokenAddress;
+                } else if (action == "sell") {
+                    fromAsset = tokenAddress;
+                    toAsset = wethAddress;
+                } else {
+                    console.log("INVALID ACTION")
+                    continue
+                }
+
+                let trade = await wallet.createTrade({
+                    amount: parseFloat(amount),
+                    fromAssetId: fromAsset,
+                    toAssetId: toAsset
+                })
+
+                console.log("trade: ", trade)
+                await trade.wait();
+
+                let status = await trade.getStatus();
+
+                console.log("trade status: ", status);
+                await sleep(5000);
+            }
+
+            await sleep(10000);
+
+            console.log("Updating portfolio");
+
+            const wethPriceUsd = await fetchWETHPrice(process.env.COINRANKING_API_KEY!)
+            updatePortfolio(messages, nameToAddressDictionary, addressToPriceDictionary, wethPriceUsd);
+            await sleep(60000);
         } catch (error) {
             if (error instanceof Error) {
                 console.error("Error:", error.message);
@@ -261,37 +310,11 @@ function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function updateTokenPrices(): Promise<TokenPriceResponse[]> {
-    try {
-        const memecoins = readMemecoinsFile();
-
-        const priceUpdates: TokenPriceResponse[] = []
-
-        for (let i = 0; i < memecoins.length; i++) {
-            console.log("getting price info for: ", memecoins[i].name);
-            const tokenPrice = await getTokenPrice(memecoins[i].address);
-            console.log(tokenPrice);
-            console.log("=========================== \n")
-            const num = i + 1
-            priceUpdates.push(tokenPrice);
-
-            if (num % 5 == 0) {
-                break
-                // await sleep(60000)
-            }
-        }
-
-        return priceUpdates;
-    } catch (error) {
-        console.log("Error updating memecoin prices: ", error)
-        throw error;
-    }
-}
-
 async function main() {
+    const { agent, config, wallet } = await initializeAgent();
+
     try {
-        const { agent, config } = await initializeAgent();
-        await runAutonomousMode(agent, config);
+        await runAutonomousMode(agent, config, wallet);
     } catch (error) {
         if (error instanceof Error) {
             console.error("Error:", error.message);
