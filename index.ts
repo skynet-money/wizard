@@ -18,10 +18,6 @@ import * as fs from "fs";
 import { readPortfolio, splitString, updatePortfolio } from "./readPortfolio";
 import { fetchCoins, Coin, fetchWETHPrice } from "./coinranking";
 
-import { Coinbase, Wallet } from "@coinbase/coinbase-sdk";
-import { error } from "console";
-
-
 dotenv.config();
 
 /**
@@ -62,6 +58,7 @@ console.log("wizard is up");
 
 // Configure a file to persist the agent's CDP MPC Wallet Data
 const WALLET_DATA_FILE = "wallet_data.txt";
+const TIME_BETWEEN_TRADES = 3600000 // 1 hour
 
 /**
  * Initialize the agent with CDP Agentkit
@@ -247,10 +244,9 @@ async function runAutonomousMode(agent: any, config: any, wallet: CdpWalletProvi
             console.log("messages length: ", messages.length);
 
             if (message == "refraining") {
-                await sleep(60000);
+                await sleep(TIME_BETWEEN_TRADES);
                 continue
             }
-            await sleep(10000);
             
             for (let i = 0; i < messages.length; i++) {
                 const messageParts = splitString(messages[i]);
@@ -290,13 +286,11 @@ async function runAutonomousMode(agent: any, config: any, wallet: CdpWalletProvi
                 await sleep(5000);
             }
 
-            await sleep(10000);
-
             console.log("Updating portfolio");
 
             const wethPriceUsd = await fetchWETHPrice(process.env.COINRANKING_API_KEY!)
             updatePortfolio(messages, nameToAddressDictionary, addressToPriceDictionary, wethPriceUsd);
-            await sleep(60000);
+            await sleep(TIME_BETWEEN_TRADES);
         } catch (error) {
             if (error instanceof Error) {
                 console.error("Error:", error.message);
