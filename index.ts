@@ -58,7 +58,7 @@ console.log("wizard is up");
 
 // Configure a file to persist the agent's CDP MPC Wallet Data
 const WALLET_DATA_FILE = "wallet_data.txt";
-const TIME_BETWEEN_TRADES = 3600000 // 1 hour
+const TIME_BETWEEN_TRADES = 60000 // 3600000 // 1 hour
 
 /**
  * Initialize the agent with CDP Agentkit
@@ -217,6 +217,7 @@ async function runAutonomousMode(agent: any, config: any, wallet: CdpWalletProvi
                 "Please be very precise and thorough in your calculations. When you calculate how much amount to sell of a given currency at the latest current price update, make sure that the portfolio amount never goes below zero. " +
                 "Please do not execute any trades yet on-chain." +
                 "Please pay careful attention to calculating the buy and sell amount. Never exceed what is specified in your portfolio. You can only sell assets that you own." +
+                "Please do not buy or sell 0.0 amounts. If your best decision is to buy or sell 0.0 of something then refrain rather. " +
                 "Please provide no analysis, and it is critical that you only reply in the format provided below: \n" +
                 "It is of utmost importance that you only answer in the following format for each buy: <token name> buy <amount in WETH> " +
                 "It is of utmost importance that you only answer in the following format for each sell: <token name> sell <amount> " + 
