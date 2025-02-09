@@ -301,7 +301,7 @@ async function runAutonomousMode(agent: any, config: any, wallet: CdpWalletProvi
             if (error instanceof Error) {
                 console.error("Error:", error.message);
             }
-            process.exit(1);
+            continue
         }
     }
 }
