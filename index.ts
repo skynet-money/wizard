@@ -272,6 +272,11 @@ async function runAutonomousMode(agent: any, config: any, wallet: CdpWalletProvi
                     continue
                 }
 
+                if (parseFloat(amount) == 0) {
+                    console.log("skipping zero amount")
+                    continue
+                }
+
                 let trade = await wallet.createTrade({
                     amount: parseFloat(amount),
                     fromAssetId: fromAsset,
